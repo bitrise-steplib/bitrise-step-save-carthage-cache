@@ -2,6 +2,7 @@ package step
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/bitrise-io/go-steputils/v2/cache"
 	"github.com/bitrise-io/go-steputils/v2/stepconf"
@@ -16,15 +17,21 @@ const (
 	// Cache key template
 	// Arch: guarantees unique cache per stack
 	// Checksum wildcards: in order to detect nested folders too, such as src/Cartfile.resolved or ios/Cartfile.resolved
-	// Cachefile: this is the special cache fingerprint created by the Bitrise `carthage-install` step.
+	// Cachefile: this is the special cache fingerprint created by the Bitrise `carthage` step.
 	// Since this file is created on the fly and isn't committed to the repo, it won't be available at cache restore
 	// time, therefore we create a separate checksum so that the restore step can partially match the key using the
 	// first checksum.
 	key = `{{ .Arch }}-carthage-cache-{{ checksum "**/Cartfile.resolved" }}-{{ checksum "**/Carthage/Cachefile" }}`
-
-	// Cached path (looking at nested folders too)
-	path = "**/Carthage"
 )
+
+var paths = []string{
+	// Prebuilt frameworks
+	// The `Carthage/Checkouts` folder is not needed, `carthage bootstrap --cache-builds` can avoid a rebuild without it
+	"**/Carthage/Build",
+
+	// Special cache fingerprint created by the Bitrise `carthage` step to skip the bootstrap of possible
+	"**/Carthage/Cachefile",
+}
 
 type Input struct {
 	Verbose bool `env:"verbose,required"`
@@ -66,7 +73,7 @@ func (step SaveCacheStep) Run() error {
 	step.logger.Println()
 	step.logger.Printf("Cache key: %s", key)
 	step.logger.Printf("Cache paths:")
-	step.logger.Printf(path)
+	step.logger.Printf(strings.Join(paths, "\n"))
 	step.logger.Println()
 
 	step.logger.EnableDebugLog(input.Verbose)
@@ -76,7 +83,7 @@ func (step SaveCacheStep) Run() error {
 		StepId:      stepId,
 		Verbose:     input.Verbose,
 		Key:         key,
-		Paths:       []string{path},
+		Paths:       paths,
 		IsKeyUnique: true,
 	})
 }

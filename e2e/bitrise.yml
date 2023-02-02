@@ -51,10 +51,6 @@ workflows:
             set -ex
 
             echo $BITRISE_CACHE_HIT
-            if [ ! -d Carthage/Checkouts ]; then
-              echo "Carthage/Checkouts directory doesn't exist"
-              exit 1
-            fi
             if [ ! -d Carthage/Build ]; then
               echo "Carthage/Build directory doesn't exist"
               exit 1

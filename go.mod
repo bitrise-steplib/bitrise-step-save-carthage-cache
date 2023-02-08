@@ -3,7 +3,7 @@ module github.com/bitrise-steplib/steps-save-carthage-cache
 go 1.17
 
 require (
-	github.com/bitrise-io/go-steputils/v2 v2.0.0-alpha.16.0.20230206125841-fdfcec3d0d66
+	github.com/bitrise-io/go-steputils/v2 v2.0.0-alpha.17
 	github.com/bitrise-io/go-utils/v2 v2.0.0-alpha.13
 )
 

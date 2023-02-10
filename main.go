@@ -23,13 +23,10 @@ func run() int {
 	pathModifier := pathutil.NewPathModifier()
 	cacheStep := step.New(logger, inputParser, pathChecker, pathProvider, pathModifier, envRepo)
 
-	exitCode := 0
-
 	if err := cacheStep.Run(); err != nil {
 		logger.Errorf(err.Error())
-		exitCode = 1
-		return exitCode
+		return 1
 	}
 
-	return exitCode
+	return 0
 }

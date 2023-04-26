@@ -42,6 +42,7 @@ func Upload(params UploadParams, logger log.Logger) error {
 
 	logger.Debugf("")
 	logger.Debugf("Upload archive")
+	logger.Debugf("Upload headers: %v", resp.UploadHeaders)
 	err = client.uploadArchive(params.ArchivePath, resp.UploadMethod, resp.UploadURL, resp.UploadHeaders)
 	if err != nil {
 		return fmt.Errorf("failed to upload archive: %w", err)

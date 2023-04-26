@@ -11,7 +11,7 @@ workflows:
   test_carthage:
     envs:
     - TEST_APP_URL: https://github.com/bitrise-io/Bitrise-iOS-Carthage-Sample.git
-    - BRANCH: test-e2e-upload
+    - BRANCH: main
     before_run:
     - _generate_api_token
     - _setup

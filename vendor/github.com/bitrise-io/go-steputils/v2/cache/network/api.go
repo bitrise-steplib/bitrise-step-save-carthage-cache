@@ -106,6 +106,7 @@ func (c apiClient) uploadArchive(archivePath, uploadMethod, uploadURL string, he
 			return fmt.Errorf("failed to read file info: %v", err)
 		}
 		headers["Content-Length"] = fmt.Sprintf("%d", info.Size())
+		log.Printf("Content-Length: %v", headers["Content-Length"])
 	}
 
 	req, err := retryablehttp.NewRequest(uploadMethod, uploadURL, file)

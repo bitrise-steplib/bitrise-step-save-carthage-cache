@@ -114,6 +114,7 @@ func (c apiClient) uploadArchive(archivePath, uploadMethod, uploadURL string, he
 		return err
 	}
 	for k, v := range headers {
+		log.Printf("%s: %s", k, v)
 		req.Header.Set(k, v)
 	}
 

@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"strings"
 
+	"github.com/bitrise-io/go-utils/v2/log"
 	"github.com/hashicorp/go-retryablehttp"
 )
 
@@ -45,13 +46,15 @@ type apiClient struct {
 	httpClient  *retryablehttp.Client
 	baseURL     string
 	accessToken string
+	logger      log.Logger
 }
 
-func newAPIClient(client *retryablehttp.Client, baseURL string, accessToken string) apiClient {
+func newAPIClient(client *retryablehttp.Client, baseURL string, accessToken string, logger log.Logger) apiClient {
 	return apiClient{
 		httpClient:  client,
 		baseURL:     baseURL,
 		accessToken: accessToken,
+		logger:      logger,
 	}
 }
 
@@ -77,7 +80,7 @@ func (c apiClient) prepareUpload(requestBody prepareUploadRequest) (prepareUploa
 	defer func(body io.ReadCloser) {
 		err := body.Close()
 		if err != nil {
-			log.Print(err.Error())
+			c.logger.Printf(err.Error())
 		}
 	}(resp.Body)
 
@@ -100,14 +103,6 @@ func (c apiClient) uploadArchive(archivePath, uploadMethod, uploadURL string, he
 		return err
 	}
 
-	if _, ok := headers["Content-Length"]; !ok {
-		info, err := file.Stat()
-		if err != nil {
-			return fmt.Errorf("failed to read file info: %v", err)
-		}
-		headers["Content-Length"] = fmt.Sprintf("%d", info.Size())
-	}
-
 	req, err := retryablehttp.NewRequest(uploadMethod, uploadURL, file)
 	if err != nil {
 		return err
@@ -115,7 +110,20 @@ func (c apiClient) uploadArchive(archivePath, uploadMethod, uploadURL string, he
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	log.Printf("Upload request headers: %v", req.Header)
+
+	// Add Content-Length header manually because retryablehttp doesn't do it automatically
+	fileInfo, err := os.Stat(archivePath)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", fileInfo.Size()))
+	req.ContentLength = fileInfo.Size()
+
+	dump, err := httputil.DumpRequest(req.Request, false)
+	if err != nil {
+		c.logger.Warnf("error while dumping request: %s", err)
+	}
+	c.logger.Debugf("Request dump: %s", string(dump))
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -124,9 +132,15 @@ func (c apiClient) uploadArchive(archivePath, uploadMethod, uploadURL string, he
 	defer func(body io.ReadCloser) {
 		err := body.Close()
 		if err != nil {
-			log.Print(err.Error())
+			c.logger.Printf(err.Error())
 		}
 	}(resp.Body)
+
+	dump, err = httputil.DumpResponse(resp, true)
+	if err != nil {
+		c.logger.Warnf("error while dumping response: %s", err)
+	}
+	c.logger.Debugf("Response dump: %s", string(dump))
 
 	if resp.StatusCode != http.StatusOK {
 		return unwrapError(resp)
@@ -151,7 +165,7 @@ func (c apiClient) acknowledgeUpload(uploadID string) (acknowledgeResponse, erro
 	defer func(body io.ReadCloser) {
 		err := body.Close()
 		if err != nil {
-			log.Print(err.Error())
+			c.logger.Printf(err.Error())
 		}
 	}(resp.Body)
 
@@ -187,7 +201,7 @@ func (c apiClient) restore(cacheKeys []string) (restoreResponse, error) {
 	defer func(body io.ReadCloser) {
 		err := body.Close()
 		if err != nil {
-			log.Print(err.Error())
+			c.logger.Printf(err.Error())
 		}
 	}(resp.Body)
 
@@ -216,7 +230,7 @@ func (c apiClient) downloadArchive(url string) (io.ReadCloser, error) {
 		defer func(body io.ReadCloser) {
 			err := body.Close()
 			if err != nil {
-				log.Print(err.Error())
+				c.logger.Printf(err.Error())
 			}
 		}(resp.Body)
 		return nil, unwrapError(resp)

@@ -1,4 +1,4 @@
-module github.com/bitrise-steplib/steps-save-carthage-cache
+module github.com/bitrise-steplib/bitrise-step-save-carthage-cache
 
 go 1.17
 

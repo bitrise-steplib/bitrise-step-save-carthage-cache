@@ -7,7 +7,7 @@ import (
 	"github.com/bitrise-io/go-utils/v2/env"
 	"github.com/bitrise-io/go-utils/v2/log"
 	"github.com/bitrise-io/go-utils/v2/pathutil"
-	"github.com/bitrise-steplib/steps-save-carthage-cache/step"
+	"github.com/bitrise-steplib/bitrise-step-save-carthage-cache/step"
 )
 
 func main() {

@@ -4,15 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
-	"github.com/bitrise-io/go-utils/retry"
+	"github.com/bitrise-io/go-steputils/v2/cache/network/chunkdownloader"
 	"github.com/bitrise-io/go-utils/v2/log"
+	"github.com/bitrise-io/go-utils/v2/retry"
 	"github.com/bitrise-io/go-utils/v2/retryhttp"
 	"github.com/hashicorp/go-retryablehttp"
-	"github.com/melbahja/got"
 )
+
+// DefaultDownloader ...
+type DefaultDownloader struct{}
 
 // DownloadParams ...
 type DownloadParams struct {
@@ -21,6 +23,7 @@ type DownloadParams struct {
 	CacheKeys      []string
 	DownloadPath   string
 	NumFullRetries int
+	MaxConcurrency uint
 }
 
 // ErrCacheNotFound ...
@@ -28,8 +31,9 @@ var ErrCacheNotFound = errors.New("no cache archive found for the provided keys"
 
 // Download archive from the cache API based on the provided keys in params.
 // If there is no match for any of the keys, the error is ErrCacheNotFound.
-func Download(ctx context.Context, params DownloadParams, logger log.Logger) (string, error) {
+func (d DefaultDownloader) Download(ctx context.Context, params DownloadParams, logger log.Logger) (string, error) {
 	retryableHTTPClient := retryhttp.NewClient(logger)
+
 	return downloadWithClient(ctx, retryableHTTPClient, params, logger)
 }
 
@@ -66,10 +70,15 @@ func downloadWithClient(ctx context.Context, httpClient *retryablehttp.Client, p
 		}
 
 		logger.Debugf("Downloading archive...")
-		downloadErr := downloadFile(ctx, httpClient.StandardClient(), restoreResponse.URL, params.DownloadPath)
+		downloadErr := downloadFile(ctx, httpClient, restoreResponse.URL, params.DownloadPath, params.MaxConcurrency, logger)
 		if downloadErr != nil {
+			err = fmt.Errorf("failed to download archive: %w", downloadErr)
+			if ctx.Err() != nil {
+				logger.Warnf("Download timed out.")
+				return err, true
+			}
 			logger.Debugf("Failed to download archive: %s", downloadErr)
-			return fmt.Errorf("failed to download archive: %w", downloadErr), false
+			return err, false
 		}
 
 		matchedKey = restoreResponse.MatchedKey
@@ -79,17 +88,11 @@ func downloadWithClient(ctx context.Context, httpClient *retryablehttp.Client, p
 	return matchedKey, err
 }
 
-func downloadFile(ctx context.Context, client *http.Client, url string, dest string) error {
-	downloader := got.New()
-	downloader.Client = client
+func downloadFile(ctx context.Context, httpClient *retryablehttp.Client, url string, dest string, maxConcurrency uint, logger log.Logger) error {
+	cfg := chunkdownloader.DefaultConfig()
+	cfg.Concurrency = maxConcurrency
+	cfg.HTTPClient = httpClient.StandardClient()
 
-	gDownload := got.NewDownload(ctx, url, dest)
-	// Client has to be set on "Download" as well,
-	// as depending on how downloader is called
-	// either the Client from the downloader or from the Download will be used.
-	gDownload.Client = client
-
-	err := downloader.Do(gDownload)
-
-	return err
+	dl := chunkdownloader.New(cfg, logger)
+	return dl.DownloadFile(ctx, url, dest)
 }

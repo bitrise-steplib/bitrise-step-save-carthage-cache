@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/bitrise-io/go-steputils/v2/cache/compression"
@@ -25,6 +26,7 @@ type RestoreCacheInput struct {
 	StepId         string
 	Verbose        bool
 	Keys           []string
+	Timeout        time.Duration
 	NumFullRetries int
 }
 
@@ -39,12 +41,14 @@ type restoreCacheConfig struct {
 	APIBaseURL     stepconf.Secret
 	APIAccessToken stepconf.Secret
 	NumFullRetries int
+	MaxConcurrency uint
 }
 
 type restorer struct {
 	envRepo    env.Repository
 	logger     log.Logger
 	cmdFactory command.Factory
+	downloader network.Downloader
 }
 
 type downloadResult struct {
@@ -52,9 +56,19 @@ type downloadResult struct {
 	matchedKey string
 }
 
-// NewRestorer ...
-func NewRestorer(envRepo env.Repository, logger log.Logger, cmdFactory command.Factory) *restorer {
-	return &restorer{envRepo: envRepo, logger: logger, cmdFactory: cmdFactory}
+// NewRestorer creates a new cache restorer instance. `downloader` can be nil, unless you want to provide a custom `Downloader` implementation.
+func NewRestorer(
+	envRepo env.Repository,
+	logger log.Logger,
+	cmdFactory command.Factory,
+	downloader network.Downloader,
+) *restorer {
+	var downloaderImpl network.Downloader = downloader
+	if downloader == nil {
+		downloaderImpl = network.DefaultDownloader{}
+	}
+
+	return &restorer{envRepo: envRepo, logger: logger, cmdFactory: cmdFactory, downloader: downloaderImpl}
 }
 
 // Restore ...
@@ -70,16 +84,28 @@ func (r *restorer) Restore(input RestoreCacheInput) error {
 	r.logger.Println()
 	r.logger.Infof("Downloading archive...")
 	downloadStartTime := time.Now()
-	result, err := r.download(context.Background(), config)
+
+	ctx := context.Background()
+	cancel := context.CancelFunc(nil)
+	if input.Timeout != 0 {
+		ctx, cancel = context.WithTimeout(ctx, input.Timeout)
+		defer cancel()
+	}
+
+	result, err := r.download(ctx, config)
 	if err != nil {
 		if errors.Is(err, network.ErrCacheNotFound) {
 			r.logger.Donef("No cache entry found for the provided key")
 			tracker.logRestoreResult(false, "", config.Keys)
-			exporter := export.NewExporter(r.cmdFactory)
+			exporter := export.NewDefaultExporter(r.cmdFactory)
 			return exporter.ExportOutput(cacheHitEnvVar, "false")
 		}
 		return fmt.Errorf("download failed: %w", err)
 	}
+
+	// On many stacks the temp dir is a tmpfs, so a leftover archive holds RAM for the whole build.
+	defer r.removeDownloadedArchive(result.filePath)
+
 	if result.matchedKey == config.Keys[0] {
 		r.logger.Printf("Exact hit for first key")
 	} else {
@@ -129,6 +155,17 @@ func (r *restorer) createConfig(input RestoreCacheInput) (restoreCacheConfig, er
 		return restoreCacheConfig{}, fmt.Errorf("the secret 'BITRISEIO_BITRISE_SERVICES_ACCESS_TOKEN' is not defined")
 	}
 
+	maxConcurrency := uint(0)
+	maxConcurrencyStr := r.envRepo.Get("BITRISEIO_DEPENDENCY_CACHE_MAX_CONCURRENCY")
+	if maxConcurrencyStr != "" {
+		parsedConcurrency, err := strconv.ParseUint(maxConcurrencyStr, 10, 32)
+		if err != nil {
+			r.logger.Warnf("Failed to parse BITRISEIO_DEPENDENCY_CACHE_MAX_CONCURRENCY: %s", err)
+		}
+
+		maxConcurrency = uint(parsedConcurrency)
+	}
+
 	keys, err := r.evaluateKeys(input.Keys)
 	if err != nil {
 		return restoreCacheConfig{}, fmt.Errorf("failed to evaluate keys: %w", err)
@@ -140,6 +177,7 @@ func (r *restorer) createConfig(input RestoreCacheInput) (restoreCacheConfig, er
 		APIBaseURL:     stepconf.Secret(apiBaseURL),
 		APIAccessToken: stepconf.Secret(apiAccessToken),
 		NumFullRetries: input.NumFullRetries,
+		MaxConcurrency: maxConcurrency,
 	}, nil
 }
 
@@ -179,8 +217,9 @@ func (r *restorer) download(ctx context.Context, config restoreCacheConfig) (dow
 		CacheKeys:      config.Keys,
 		DownloadPath:   downloadPath,
 		NumFullRetries: config.NumFullRetries,
+		MaxConcurrency: config.MaxConcurrency,
 	}
-	matchedKey, err := network.Download(ctx, params, r.logger)
+	matchedKey, err := r.downloader.Download(ctx, params, r.logger)
 	if err != nil {
 		return downloadResult{}, err
 	}
@@ -190,12 +229,22 @@ func (r *restorer) download(ctx context.Context, config restoreCacheConfig) (dow
 	return downloadResult{filePath: downloadPath, matchedKey: matchedKey}, nil
 }
 
+func (r *restorer) removeDownloadedArchive(archivePath string) {
+	if archivePath == "" {
+		return
+	}
+	dir := filepath.Dir(archivePath)
+	if err := os.RemoveAll(dir); err != nil {
+		r.logger.Warnf("Failed to clean up temporary cache archive %s: %s", dir, err)
+	}
+}
+
 func (r *restorer) exposeCacheHit(result downloadResult, evaluatedKeys []string) error {
 	if result.filePath == "" || result.matchedKey == "" || len(evaluatedKeys) == 0 {
 		return nil
 	}
 
-	exporter := export.NewExporter(r.cmdFactory)
+	exporter := export.NewDefaultExporter(r.cmdFactory)
 	var cacheHitValue string
 	if result.matchedKey == evaluatedKeys[0] {
 		cacheHitValue = "exact"
